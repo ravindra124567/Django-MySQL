@@ -8,10 +8,10 @@ A simple Django web application that retrieves and displays date and time record
 - MySQL database integration
 
 ## Technologies Used
-* Python 3.x
-* Django
-* MySQL
-* HTML/CSS/JavaScript
+- Python 3.x
+- Django
+- MySQL
+- HTML/CSS/JavaScript
 
 ## Setup Instructions
 
@@ -49,7 +49,25 @@ CREATE DATABASE django_testapp;
 python manage.py makemigrations
 python manage.py migrate
 ```
-7. Run the development server:
+7. Add Sample Data:
+```
+python manage.py shell
+```
+Then execute:
+```
+from testapp01.models import DateTimeRecord
+from datetime import datetime
+
+# Add 5 sample records
+for i in range(5):
+    DateTimeRecord.objects.create(
+        recorded_date=datetime.now().date(),
+        recorded_time=datetime.now().time()
+    )
+
+exit()
+```
+8. Run the development server:
 ```
 python manage.py runserver
 ```
