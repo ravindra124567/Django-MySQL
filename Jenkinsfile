@@ -1,31 +1,25 @@
 pipeline {
     agent any
 
+    environment {
+        VENV_DIR = "venv"
+    }
+
     stages {
-        stage('Checkout') {
+        stage('Checkout SCM') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/ravindra124567/Django-MySQL.git'
+                    url: 'https://github.com/ravindra124567/Django-MySQL.git',
+                    credentialsId: 'GITS_CREDENTIAL'
             }
         }
 
-        stage('System Dependencies') {
+        stage('Setup Python Environment') {
             steps {
                 sh '''
-                    sudo apt-get update -y
-                    sudo apt-get install -y pkg-config libmysqlclient-dev build-essential python3.12-dev python3.12-venv
-                '''
-            }
-        }
-
-        stage('Install Dependencies') {
-            steps {
-                sh '''
-                    # Clean old venv if exists
-                    rm -rf venv
-                    python3 -m venv venv
-                    . venv/bin/activate
-                    pip install --upgrade pip setuptools wheel
+                    python3 -m venv $VENV_DIR
+                    . $VENV_DIR/bin/activate
+                    pip install --upgrade pip
                     pip install -r requirements.txt
                 '''
             }
@@ -34,7 +28,7 @@ pipeline {
         stage('Run Migrations') {
             steps {
                 sh '''
-                    . venv/bin/activate
+                    . $VENV_DIR/bin/activate
                     python manage.py migrate
                 '''
             }
@@ -43,7 +37,7 @@ pipeline {
         stage('Run Tests') {
             steps {
                 sh '''
-                    . venv/bin/activate
+                    . $VENV_DIR/bin/activate
                     python manage.py test
                 '''
             }
@@ -51,9 +45,17 @@ pipeline {
 
         stage('Build Success') {
             steps {
-                echo "✅ Django + MySQL Pipeline executed successfully!"
+                echo 'Pipeline executed successfully!'
             }
         }
     }
-}
 
+    post {
+        failure {
+            echo 'Pipeline failed!'
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+    }
+}
