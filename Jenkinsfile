@@ -1,102 +1,137 @@
 pipeline {
     agent any
-
+    
     environment {
-        VENV_DIR = "venv"
-        DB_NAME = "mydb"
-        DB_USER = "myuser"
-        DB_PASS = "mypassword"
-        DB_ROOT_PASS = "root"
-        DB_HOST = "127.0.0.1"
-        DB_PORT = "3306"
+        PYTHON_VERSION = 'python3'
+        VENV_PATH = "${WORKSPACE}/venv"
+        MYSQL_CONTAINER = 'mysql-server-${BUILD_NUMBER}'
+        MYSQL_ROOT_PASSWORD = 'root'
+        MYSQL_DATABASE = 'mydb'
+        MYSQL_USER = 'myuser'
+        MYSQL_PASSWORD = 'mypassword'
+        MYSQL_PORT = '3306'
     }
-
+    
     stages {
-
         stage('Checkout SCM') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/ravindra124567/Django-MySQL.git',
-                    credentialsId: 'GITS_CREDENTIAL'
+                    credentialsId: 'GITS_CREDENTIAL',
+                    url: 'https://github.com/ravindra124567/Django-MySQL.git'
             }
         }
-
+        
         stage('Start MySQL Docker') {
             steps {
-                sh '''
-                    # Remove old container if exists
-                    docker rm -f mysql-server || true
-                    # Start new MySQL container
-                    docker run -d --name mysql-server \
-                        -e MYSQL_ROOT_PASSWORD=$DB_ROOT_PASS \
-                        -e MYSQL_DATABASE=$DB_NAME \
-                        -e MYSQL_USER=$DB_USER \
-                        -e MYSQL_PASSWORD=$DB_PASS \
-                        -p $DB_PORT:3306 mysql:8
-                    # Wait for MySQL to initialize
-                    sleep 20
-                '''
+                script {
+                    sh '''
+                        # Remove any existing container with the same name
+                        docker rm -f ${MYSQL_CONTAINER} || true
+                        
+                        # Start MySQL container
+                        docker run -d \
+                            --name ${MYSQL_CONTAINER} \
+                            -e MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD} \
+                            -e MYSQL_DATABASE=${MYSQL_DATABASE} \
+                            -e MYSQL_USER=${MYSQL_USER} \
+                            -e MYSQL_PASSWORD=${MYSQL_PASSWORD} \
+                            -p ${MYSQL_PORT}:3306 \
+                            mysql:8
+                        
+                        # Wait for MySQL to be ready
+                        echo "Waiting for MySQL to be ready..."
+                        sleep 20
+                        
+                        # Verify MySQL is running
+                        docker exec ${MYSQL_CONTAINER} mysql -u${MYSQL_USER} -p${MYSQL_PASSWORD} -e "SELECT 1;"
+                    '''
+                }
             }
         }
-
+        
         stage('Setup Python Environment') {
             steps {
                 sh '''
-                    python3 -m venv $VENV_DIR
-                    . $VENV_DIR/bin/activate
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
+                    # Clean old venv if exists
+                    rm -rf ${VENV_PATH}
+                    
+                    # Create new virtual environment
+                    ${PYTHON_VERSION} -m venv ${VENV_PATH}
+                    
+                    # Upgrade pip
+                    ${VENV_PATH}/bin/pip install --upgrade pip setuptools wheel
                 '''
             }
         }
-
+        
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    ${VENV_PATH}/bin/pip install -r requirements.txt
+                '''
+            }
+        }
+        
         stage('Configure Django DB Settings') {
             steps {
                 sh '''
-                    # Update settings.py dynamically for CI environment
-                    sed -i "s/'HOST': '.*'/'HOST': '$DB_HOST'/g" project/settings.py
-                    sed -i "s/'PORT': '.*'/'PORT': '$DB_PORT'/g" project/settings.py
-                    sed -i "s/'USER': '.*'/'USER': '$DB_USER'/g" project/settings.py
-                    sed -i "s/'PASSWORD': '.*'/'PASSWORD': '$DB_PASS'/g" project/settings.py
-                    sed -i "s/'NAME': '.*'/'NAME': '$DB_NAME'/g" project/settings.py
+                    # Create or update settings with database configuration
+                    cat > db_settings.py << EOF
+# Database configuration for Jenkins pipeline
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': '${MYSQL_DATABASE}',
+        'USER': '${MYSQL_USER}',
+        'PASSWORD': '${MYSQL_PASSWORD}',
+        'HOST': 'localhost',
+        'PORT': '${MYSQL_PORT}',
+    }
+}
+EOF
+                    echo "Database settings configured"
                 '''
             }
         }
-
+        
         stage('Run Migrations') {
             steps {
                 sh '''
-                    . $VENV_DIR/bin/activate
-                    python manage.py migrate
+                    ${VENV_PATH}/bin/python manage.py migrate
                 '''
             }
         }
-
+        
         stage('Run Tests') {
             steps {
                 sh '''
-                    . $VENV_DIR/bin/activate
-                    python manage.py test
+                    ${VENV_PATH}/bin/python manage.py test
                 '''
             }
         }
-
+        
         stage('Build Success') {
             steps {
-                echo 'Pipeline executed successfully!'
+                echo "✅ Django + MySQL Pipeline executed successfully!"
             }
         }
     }
-
+    
     post {
         always {
-            sh 'docker rm -f mysql-server || true'  // Clean up container
-        }
-        failure {
-            echo 'Pipeline failed!'
+            script {
+                sh '''
+                    # Stop and remove MySQL container
+                    docker rm -f ${MYSQL_CONTAINER} || true
+                '''
+                echo "🧹 Cleaned up MySQL container"
+            }
         }
         success {
-            echo 'Pipeline completed successfully!'
+            echo "🎉 Pipeline completed successfully!"
+        }
+        failure {
+            echo "❌ Pipeline failed. Check the logs above."
         }
     }
 }
