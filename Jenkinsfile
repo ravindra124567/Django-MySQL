@@ -4,12 +4,12 @@ pipeline {
     environment {
         PYTHON_VERSION = 'python3'
         VENV_PATH = "${WORKSPACE}/venv"
-        MYSQL_CONTAINER = 'mysql-server-${BUILD_NUMBER}'
+        MYSQL_CONTAINER = 'jenkins-mysql-test'
         MYSQL_ROOT_PASSWORD = 'root'
         MYSQL_DATABASE = 'mydb'
         MYSQL_USER = 'myuser'
         MYSQL_PASSWORD = 'mypassword'
-        MYSQL_PORT = '3306'
+        MYSQL_PORT = '3307'  // Changed to avoid conflicts
     }
     
     stages {
@@ -23,35 +23,40 @@ pipeline {
         
         stage('Start MySQL Docker') {
             steps {
-                script {
-                    sh '''
-                        # Remove any existing container with the same name
-                        docker rm -f ${MYSQL_CONTAINER} || true
-                        
-                        # Start MySQL container
-                        docker run -d \
-                            --name ${MYSQL_CONTAINER} \
-                            -e MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD} \
-                            -e MYSQL_DATABASE=${MYSQL_DATABASE} \
-                            -e MYSQL_USER=${MYSQL_USER} \
-                            -e MYSQL_PASSWORD=${MYSQL_PASSWORD} \
-                            -p ${MYSQL_PORT}:3306 \
-                            mysql:8
-                        
-                        # Wait for MySQL to be ready
-                        echo "Waiting for MySQL to be ready..."
-                        sleep 20
-                        
-                        # Verify MySQL is running
-                        docker exec ${MYSQL_CONTAINER} mysql -u${MYSQL_USER} -p${MYSQL_PASSWORD} -e "SELECT 1;"
-                    '''
-                }
+                sh """
+                    # Remove any existing container
+                    docker rm -f ${MYSQL_CONTAINER} || true
+                    
+                    # Start MySQL container
+                    docker run -d \
+                        --name ${MYSQL_CONTAINER} \
+                        -e MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD} \
+                        -e MYSQL_DATABASE=${MYSQL_DATABASE} \
+                        -e MYSQL_USER=${MYSQL_USER} \
+                        -e MYSQL_PASSWORD=${MYSQL_PASSWORD} \
+                        -p ${MYSQL_PORT}:3306 \
+                        mysql:8
+                    
+                    # Wait for MySQL to be ready
+                    echo "Waiting for MySQL to initialize..."
+                    sleep 30
+                    
+                    # Test MySQL connection
+                    for i in {1..30}; do
+                        if docker exec ${MYSQL_CONTAINER} mysqladmin ping -h localhost --silent; then
+                            echo "MySQL is ready!"
+                            break
+                        fi
+                        echo "Waiting for MySQL... (\$i/30)"
+                        sleep 2
+                    done
+                """
             }
         }
         
         stage('Setup Python Environment') {
             steps {
-                sh '''
+                sh """
                     # Clean old venv if exists
                     rm -rf ${VENV_PATH}
                     
@@ -60,24 +65,23 @@ pipeline {
                     
                     # Upgrade pip
                     ${VENV_PATH}/bin/pip install --upgrade pip setuptools wheel
-                '''
+                """
             }
         }
         
         stage('Install Dependencies') {
             steps {
-                sh '''
+                sh """
                     ${VENV_PATH}/bin/pip install -r requirements.txt
-                '''
+                """
             }
         }
         
         stage('Configure Django DB Settings') {
             steps {
                 sh '''
-                    # Create or update settings with database configuration
-                    cat > db_settings.py << EOF
-# Database configuration for Jenkins pipeline
+                    # Update Django settings for MySQL
+                    cat > local_settings.py << EOF
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -86,27 +90,30 @@ DATABASES = {
         'PASSWORD': '${MYSQL_PASSWORD}',
         'HOST': 'localhost',
         'PORT': '${MYSQL_PORT}',
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+        },
     }
 }
 EOF
-                    echo "Database settings configured"
+                    cat local_settings.py
                 '''
             }
         }
         
         stage('Run Migrations') {
             steps {
-                sh '''
-                    ${VENV_PATH}/bin/python manage.py migrate
-                '''
+                sh """
+                    ${VENV_PATH}/bin/python manage.py migrate --noinput
+                """
             }
         }
         
         stage('Run Tests') {
             steps {
-                sh '''
-                    ${VENV_PATH}/bin/python manage.py test
-                '''
+                sh """
+                    ${VENV_PATH}/bin/python manage.py test --noinput
+                """
             }
         }
         
@@ -119,13 +126,11 @@ EOF
     
     post {
         always {
-            script {
-                sh '''
-                    # Stop and remove MySQL container
-                    docker rm -f ${MYSQL_CONTAINER} || true
-                '''
-                echo "🧹 Cleaned up MySQL container"
-            }
+            sh """
+                # Stop and remove MySQL container
+                docker rm -f ${MYSQL_CONTAINER} || true
+            """
+            echo "🧹 Cleaned up MySQL container"
         }
         success {
             echo "🎉 Pipeline completed successfully!"
